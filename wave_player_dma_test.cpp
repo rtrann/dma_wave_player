@@ -157,30 +157,33 @@ void wave_player::play(FILE *wavefile)
           
           DAC_fifo[DAC_wptr]=dac_data; //put slice value into dac fifo 
           
-          conf0
-           ->channelNum    ( MODDMA::Channel_0 )
-           ->srcMemAddr    ( (uint32_t) &DAC_fifo[DAC_wptr])
-           ->dstMemAddr    ( MODDMA::DAC )
-           ->transferSize  ( sizeof(DAC_fifo[DAC_wptr]) ) //in bytes
-           ->transferType  ( MODDMA::m2p )
-           ->dstConn       ( MODDMA::DAC )
-           ->attach_tc     ( &TC0_callback )
-           ->attach_err    ( &ERR0_callback )     
-          ; // config end
-          
-          LPC_DAC->DACCNTVAL = 542.98; // 24 MHz / 2 bytes for 1 hz... /  =  
-                                       // 24 MHz / 2 / 44.1 KHz = 272.1
-                                       // 24 MHz / 2 / 22.1 KHz = 542.98 
+          if (DAC_wptr == 255)
+          {
+            conf0
+             ->channelNum    ( MODDMA::Channel_0 )
+             ->srcMemAddr    ( (uint32_t) &DAC_fifo)
+             ->dstMemAddr    ( MODDMA::DAC )
+             ->transferSize  ( siezeof(DAC_fifo) ) //in bytes
+             ->transferType  ( MODDMA::m2p )
+             ->dstConn       ( MODDMA::DAC )
+             ->attach_tc     ( &TC0_callback )
+             ->attach_err    ( &ERR0_callback )     
+            ; // config end
+            
+            LPC_DAC->DACCNTVAL = 542.98; // 24 MHz / 2 bytes for 1 hz... /  =  
+                                         // 24 MHz / 2 / 44.1 KHz = 272.1
+                                         // 24 MHz / 2 / 22.1 KHz = 542.98 
 
-          // Prepare first configuration.
-          if (!dma.Prepare( conf0 )) {
-              error("dma conf0 not loaded");
+            // Prepare first configuration.
+            if (!dma.Prepare( conf0 )) {
+                error("dma conf0 not loaded");
+            }
+            //dma.Prepare(conf0);
+            // Begin (enable DMA and counter). Note, don't enable
+            // DBLBUF_ENA as we are using DMA double buffering.
+            LPC_DAC->DACCTRL |= (3UL << 2); //CNT_ENA time out counter is enabled, DMA_ENA is enabled
           }
-          //dma.Prepare(conf0);
-          // Begin (enable DMA and counter). Note, don't enable
-          // DBLBUF_ENA as we are using DMA double buffering.
-          LPC_DAC->DACCTRL |= (3UL << 2); //CNT_ENA time out counter is enabled, DMA_ENA is enabled
-          
+
           DAC_wptr=(DAC_wptr+1) & 0xff; // increment element
 
           //while (DAC_wptr==DAC_rptr) { // waits for a tick to increment rptr
