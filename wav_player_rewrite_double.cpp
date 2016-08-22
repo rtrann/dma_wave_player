@@ -38,7 +38,7 @@ int read_slices = 0;
 int DMA_complete = 0;
 int file_end = 0;
 int buf_sel = 0;
-int dma_sel - 0;
+int dma_sel = 0;
 
 FILE *wav_file4 = fopen("/sd/wf/bd_04.wav", "r"); //16 bit 22.1 khz
 
@@ -131,6 +131,7 @@ void read_and_avg_slices(FILE *& wavefile, short DAC_wptr)
     }
   
     dac_data=(short unsigned)slice_value;//16 bit
+    //printf("buf_sel - %d\n", buf_sel);
     if (buf_sel == 0)
     {
       DAC_fifo[DAC_wptr]=dac_data; //put slice value into dac fifo
@@ -155,28 +156,13 @@ void startDMA(int bytesToSend)
   //printf("bytes to send - %d\r\n", bytesToSend);
   //("dac_fifo address - %d\r\n", &DAC_fifo);
   //printf("dac_fifo[1] - %d\r\n", DAC_fifo[1]);
-  conf0 = new MODDMA_Config;
+  //printf("dac_fifo2[1] - %d\r\n", DAC_fifo2[1]);
   conf0
-   ->channelNum    ( MODDMA::Channel_0 )
-   ->srcMemAddr    ( (uint32_t) &DAC_fifo)
-   ->dstMemAddr    ( MODDMA::DAC )
    ->transferSize  ( bytesToSend ) //in bytes
-   ->transferType  ( MODDMA::m2p )
-   ->dstConn       ( MODDMA::DAC )
-   ->attach_tc     ( &TC0_callback )
-   ->attach_err    ( &ERR0_callback ) 
   ; // config end
 
-  conf0 = new MODDMA_Config;  
   conf1
-   ->channelNum    ( MODDMA::Channel_1 )
-   ->srcMemAddr    ( (uint32_t) &DAC_fifo2)
-   ->dstMemAddr    ( MODDMA::DAC )
    ->transferSize  ( bytesToSend ) //in bytes
-   ->transferType  ( MODDMA::m2p )
-   ->dstConn       ( MODDMA::DAC )
-   ->attach_tc     ( &TC0_callback )
-   ->attach_err    ( &ERR0_callback )     
   ; // config end  
   
   //DAC frequency
@@ -184,11 +170,21 @@ void startDMA(int bytesToSend)
                                        // 24 MHz / 2 / 44.1 KHz = 272.1
                                        // 24 MHz / 2 / 22.1 KHz = 542.98 
                                        // 24 MHZ / 256/ 22.1 Khz = 4.24
-  // Prepare first configuration.
-  if (!dma.Prepare( "conf" + dma_sel )) {
-      error("dma conf0 not loaded");
+  // Prepare config
+  //printf("dma_sel = %d\n", dma_sel);
+  if(dma_sel == 0) 
+  {
+    if (!dma.Prepare( conf0 )) {
+        error("dma conf0 not loaded");
+    }
+  }else if (dma_sel == 1)
+  {
+    if (!dma.Prepare( conf1 )) {
+        error("dma conf1 not loaded");
+    }      
   }
   dma_sel = (dma_sel+1) & 1;
+  
   // Begin (enable DMA and counter). Note, don't enable
   // DBLBUF_ENA as we are using DMA double buffering.
   LPC_DAC->DACCTRL |= (3UL << 2); //CNT_ENA time out counter is enabled, DMA_ENA is enabled
@@ -196,7 +192,7 @@ void startDMA(int bytesToSend)
 }
 
 int main()
-{
+{  
   fseek(wav_file4, 0, SEEK_SET);
   int wptr = 0;
   int slice_num = 0;
@@ -204,7 +200,28 @@ int main()
   for (i=0;i<256;i+=2) {
     DAC_fifo[i]=0;
     DAC_fifo[i+1]=3000;
-  }  
+  }
+  conf0 = new MODDMA_Config;
+  conf0
+   ->channelNum    ( MODDMA::Channel_0 )
+   ->srcMemAddr    ( (uint32_t) &DAC_fifo)
+   ->dstMemAddr    ( MODDMA::DAC )
+   ->transferType  ( MODDMA::m2p )
+   ->dstConn       ( MODDMA::DAC )
+   ->attach_tc     ( &TC0_callback )
+   ->attach_err    ( &ERR0_callback ) 
+  ; // config end
+
+  conf1 = new MODDMA_Config;  
+  conf1
+   ->channelNum    ( MODDMA::Channel_1 )
+   ->srcMemAddr    ( (uint32_t) &DAC_fifo2)
+   ->dstMemAddr    ( MODDMA::DAC )
+   ->transferType  ( MODDMA::m2p )
+   ->dstConn       ( MODDMA::DAC )
+   ->attach_tc     ( &TC1_callback )
+   ->attach_err    ( &ERR1_callback )     
+  ; // config end     
   while (file_end == 0)
   {
     //printf("file_end - %d\n", file_end);
