@@ -45,7 +45,6 @@ Reads wave file header info, and sets a flag when it gets to the slice data
 */
 void read_wav_file(FILE *& wavefile) 
 {
-  //printf("read_wav_file function\r\n");
   fread(&chunk_id,4,1,wavefile); //get chunk id
   fread(&chunk_size,4,1,wavefile); //get chunk size
   //printf("chunk type 0x%x, size %d\n",chunk_id,chunk_size);
@@ -64,7 +63,6 @@ void read_wav_file(FILE *& wavefile)
         break;
       case 0x61746164: //AUDIO DATA
         read_slices = 1; //set read_slices flag, start reading slices 
-        //printf("read_slices 3 %d\r\n", read_slices);    
         num_slices=chunk_size/wav_format.block_align; //atleast 16 bits / 16 bits
         //printf("num_slices = %d / %d = %d \n", chunk_size, wav_format.block_align, chunk_size / wav_format.block_align); 
         break;
@@ -80,19 +78,17 @@ void read_wav_file(FILE *& wavefile)
   } else if (feof(wavefile)) 
   {
     file_end = 1;
-    //printf("1 feof - %d\n", file_end);
     
   }
 }
 
 /*
-Reads slice by slice, averaging channels to mono. Saves to the DAC_fifo[wptr]
+Reads slice by slice, averaging channels to mono. Saves to the DAC_fifo[slicesRead]
 */
 void read_and_avg_slices(FILE *& wavefile, short DAC_wptr)
 {
   if (!feof(wavefile)) //sequentially reading the wave file seperating it into different chunk_ids
   { 
-    //printf("read_and_avg_slices\n");
     //allocate slice buffer big enough to hold a slice
     slice_buf=(char *)malloc(wav_format.block_align); //set a 16 bit slice buffer (block_aligis type short)  
     if (!slice_buf) 
@@ -134,7 +130,6 @@ void read_and_avg_slices(FILE *& wavefile, short DAC_wptr)
   } else if (feof(wavefile))
   {
     file_end = 1; 
-    //printf("2 feof - %d\n", file_end);
        
   }
 }
@@ -142,18 +137,16 @@ void read_and_avg_slices(FILE *& wavefile, short DAC_wptr)
 /*
 Config and enable for the DMA
 */
-void startDMA(int bytesToSend)
+void startDMA(int numOfSlices)
 {
-  //printf("bytes to send - %d\r\n", bytesToSend);
-  //("dac_fifo address - %d\r\n", &DAC_fifo);
-  //printf("dac_fifo[1] - %d\r\n", DAC_fifo[1]);
+  //printf("num of slices to send - %d\r\n", numOfSlices);
   conf0 = new MODDMA_Config;
 
   conf0
    ->channelNum    ( MODDMA::Channel_0 )
    ->srcMemAddr    ( (uint32_t) &DAC_fifo)
    ->dstMemAddr    ( MODDMA::DAC )
-   ->transferSize  ( bytesToSend ) //in bytes
+   ->transferSize  ( numOfSlices )
    ->transferType  ( MODDMA::m2p )
    ->dstConn       ( MODDMA::DAC )
    ->attach_tc     ( &TC0_callback )
@@ -161,7 +154,7 @@ void startDMA(int bytesToSend)
   ; // config end
   
   //DAC frequency
-  LPC_DAC->DACCNTVAL = 4.24; // 24 MHz / 2 bytes for 1 hz... /  =  
+  LPC_DAC->DACCNTVAL = 5; // 24 MHz / 2 bytes for 1 hz... /  =  
                                        // 24 MHz / 2 / 44.1 KHz = 272.1
                                        // 24 MHz / 2 / 22.1 KHz = 542.98 
                                        // 24 MHZ / 256/ 22.1 Khz = 4.24
@@ -172,35 +165,29 @@ void startDMA(int bytesToSend)
   // Begin (enable DMA and counter). Note, don't enable
   // DBLBUF_ENA as we are using DMA double buffering.
   LPC_DAC->DACCTRL |= (3UL << 2); //CNT_ENA time out counter is enabled, DMA_ENA is enabled
-  //printf("test\n"); 
 }
 
 int main()
 {
   fseek(wav_file4, 0, SEEK_SET);
-  int wptr = 0;
+  int slicesRead = 0;
   int slice_num = 0;
   file_end = 0;
   for (i=0;i<256;i+=2) {
     DAC_fifo[i]=0;
     DAC_fifo[i+1]=3000;
-  }  
+  }
   while (file_end == 0)
   {
-    //printf("file_end - %d\n", file_end);
     do
     {
       if(read_slices == 0) 
       {
         read_wav_file(wav_file4); // otherwise wav file data is read until slice data is found, feof sets file_end to 1
-        //printf("read_wav_file \r\n");
-        //printf("wptr %d\r\n", wptr); 
       } else if (read_slices == 1)           
       {      
-        read_and_avg_slices(wav_file4, wptr);
-        //printf("read_and_avg_slices \r\n");
-        //printf("DAC_fifo[%d] - %d\n", wptr, DAC_fifo[wptr]); //print slice data
-        wptr = (wptr+1); //increment to the next DAC_fifo position
+        read_and_avg_slices(wav_file4, slicesRead);
+        slicesRead = (slicesRead+1); //increment to the next DAC_fifo position
         //slices ++;
         if (num_slices == slice_num) //if all slices are read for this file, turn off read_slices flag 
         {
@@ -210,23 +197,19 @@ int main()
           slice_num++; //increment to the next slice
         }
       }
-    } while (wptr != 255 && file_end == 0); //256 slices read, time for DMA
+    } while (slicesRead != 256 && file_end == 0); //256 slices read, time for DMA
     if (slice_num == 0)
     {
         // nothing to send
         break; 
     } else 
-    {
-      //printf("2 - chunk type 0x%x, size %d\n",chunk_id,chunk_size);        
-      //printf("slice_num = %d\r\n", slice_num); //this and wptr should match at the end, wptr is 1 extra?    
-      //printf("wptr - %d\n", wptr);       
-      startDMA(wptr +1); //255 + 1 = 256, actual number of elements in the array.
-      wptr = 0;
+    {      
+      startDMA(slicesRead);
+      slicesRead = 0;
       /*
       while (!DMA_complete) //wait for the DMA completion flag to set
       {
         //printf("DMA in progress - DMA_complete = %d\n", DMA_complete);
-        //this doesnt work unless there is some command in here, need to research busy wait..
         ;
       }
       printf("DMA_Complete - %d\n", DMA_complete);
