@@ -22,6 +22,10 @@ void ERR0_callback(void);
 void TC1_callback(void);
 void ERR1_callback(void);
 
+int slicesRead = 0;
+
+#define BUFFER_SIZE 4000
+
 unsigned chunk_id,chunk_size,channel;
 unsigned data,samp_int,i;
 short unsigned dac_data;
@@ -32,7 +36,7 @@ unsigned char *data_bptr;
 int *data_wptr;
 FMT_STRUCT wav_format;
 long slice,num_slices;
-unsigned short DAC_fifo[256], DAC_fifo2[256];
+unsigned short DAC_fifo[BUFFER_SIZE], DAC_fifo2[BUFFER_SIZE];
 short DAC_wptr;
 int read_slices = 0;
 int DMA_complete = 0;
@@ -68,7 +72,7 @@ void read_wav_file(FILE *& wavefile)
         read_slices = 1; //set read_slices flag, start reading slices 
         //printf("read_slices 3 %d\r\n", read_slices);    
         num_slices=chunk_size/wav_format.block_align; //atleast 16 bits / 16 bits
-        //printf("num_slices = %d / %d = %d \n", chunk_size, wav_format.block_align, chunk_size / wav_format.block_align); 
+        printf("num_slices = %d / %d = %d \n", chunk_size, wav_format.block_align, chunk_size / wav_format.block_align); 
         break;
       case 0x5453494c: //INFO CHUNK
         fseek(wavefile,chunk_size,SEEK_CUR);
@@ -88,7 +92,7 @@ void read_wav_file(FILE *& wavefile)
 }
 
 /*
-Reads slice by slice, averaging channels to mono. Saves to the DAC_fifo[wptr]
+Reads slice by slice, averaging channels to mono. Saves to the DAC_fifo[slicesRead]
 */
 void read_and_avg_slices(FILE *& wavefile, short DAC_wptr)
 {
@@ -134,39 +138,52 @@ void read_and_avg_slices(FILE *& wavefile, short DAC_wptr)
     //printf("buf_sel - %d\n", buf_sel);
     if (buf_sel == 0)
     {
-      DAC_fifo[DAC_wptr]=dac_data; //put slice value into dac fifo
+      //DAC_fifo[DAC_wptr]=dac_data; //put slice value into dac fifo
+      DAC_fifo[DAC_wptr]=(dac_data & 0xFFC0) | (1<<16); 
     } else if (buf_sel == 1)
     {
-      DAC_fifo2[DAC_wptr]=dac_data; //put slice value into dac fifo
+      //DAC_fifo2[DAC_wptr]=dac_data; //put slice value into dac fifo
+      DAC_fifo2[DAC_wptr]=(dac_data & 0xFFC0) | (1<<16); 
     }
     free(slice_buf);
   } else if (feof(wavefile))
   {
-    file_end = 1; 
-    //printf("2 feof - %d\n", file_end);
-       
+    file_end = 1;        
   }
 }
 
 /*
 Config and enable for the DMA
 */
-void startDMA(int bytesToSend)
+void startDMA(int numOfSlices)
 {
-  //printf("bytes to send - %d\r\n", bytesToSend);
-  //("dac_fifo address - %d\r\n", &DAC_fifo);
-  //printf("dac_fifo[1] - %d\r\n", DAC_fifo[1]);
-  //printf("dac_fifo2[1] - %d\r\n", DAC_fifo2[1]);
+  //printf("numOfSlices to send - %d\r\n", numOfSlices);
+ conf0 = new MODDMA_Config;
   conf0
-   ->transferSize  ( bytesToSend ) //in bytes
+   ->channelNum    ( MODDMA::Channel_0 )
+   ->srcMemAddr    ( (uint32_t) &DAC_fifo)
+   ->dstMemAddr    ( MODDMA::DAC )
+   ->transferSize  ( numOfSlices )   
+   ->transferType  ( MODDMA::m2p )
+   ->dstConn       ( MODDMA::DAC )
+   ->attach_tc     ( &TC0_callback )
+   ->attach_err    ( &ERR0_callback ) 
   ; // config end
 
+  conf1 = new MODDMA_Config;  
   conf1
-   ->transferSize  ( bytesToSend ) //in bytes
-  ; // config end  
-  
+   ->channelNum    ( MODDMA::Channel_1 )
+   ->srcMemAddr    ( (uint32_t) &DAC_fifo2)
+   ->dstMemAddr    ( MODDMA::DAC )
+   ->transferSize  ( numOfSlices )   
+   ->transferType  ( MODDMA::m2p )
+   ->dstConn       ( MODDMA::DAC )
+   ->attach_tc     ( &TC1_callback )
+   ->attach_err    ( &ERR1_callback )     
+  ; // config end     
+
   //DAC frequency
-  LPC_DAC->DACCNTVAL = 4.24; // 24 MHz / 2 bytes for 1 hz... /  =  
+  LPC_DAC->DACCNTVAL = 1800; // 24 MHz / 2 bytes for 1 hz... /  =  
                                        // 24 MHz / 2 / 44.1 KHz = 272.1
                                        // 24 MHz / 2 / 22.1 KHz = 542.98 
                                        // 24 MHZ / 256/ 22.1 Khz = 4.24
@@ -188,40 +205,18 @@ void startDMA(int bytesToSend)
   // Begin (enable DMA and counter). Note, don't enable
   // DBLBUF_ENA as we are using DMA double buffering.
   LPC_DAC->DACCTRL |= (3UL << 2); //CNT_ENA time out counter is enabled, DMA_ENA is enabled
-  //printf("test\n"); 
 }
 
 int main()
 {  
   fseek(wav_file4, 0, SEEK_SET);
-  int wptr = 0;
   int slice_num = 0;
   file_end = 0;
-  for (i=0;i<256;i+=2) {
-    DAC_fifo[i]=0;
-    DAC_fifo[i+1]=3000;
-  }
-  conf0 = new MODDMA_Config;
-  conf0
-   ->channelNum    ( MODDMA::Channel_0 )
-   ->srcMemAddr    ( (uint32_t) &DAC_fifo)
-   ->dstMemAddr    ( MODDMA::DAC )
-   ->transferType  ( MODDMA::m2p )
-   ->dstConn       ( MODDMA::DAC )
-   ->attach_tc     ( &TC0_callback )
-   ->attach_err    ( &ERR0_callback ) 
-  ; // config end
-
-  conf1 = new MODDMA_Config;  
-  conf1
-   ->channelNum    ( MODDMA::Channel_1 )
-   ->srcMemAddr    ( (uint32_t) &DAC_fifo2)
-   ->dstMemAddr    ( MODDMA::DAC )
-   ->transferType  ( MODDMA::m2p )
-   ->dstConn       ( MODDMA::DAC )
-   ->attach_tc     ( &TC1_callback )
-   ->attach_err    ( &ERR1_callback )     
-  ; // config end     
+  //for (i=0;i<BUFFER_SIZE;i+=2) {
+  //  DAC_fifo[i]=0;
+  //  DAC_fifo[i+1]=3000;
+  //}
+   
   while (file_end == 0)
   {
     //printf("file_end - %d\n", file_end);
@@ -231,14 +226,15 @@ int main()
       {
         read_wav_file(wav_file4); // otherwise wav file data is read until slice data is found, feof sets file_end to 1
         //printf("read_wav_file \r\n");
-        //printf("wptr %d\r\n", wptr); 
+        //printf("slicesRead %d\r\n", slicesRead); 
       } else if (read_slices == 1)           
       {      
-        read_and_avg_slices(wav_file4, wptr);
+        read_and_avg_slices(wav_file4, slicesRead);
         //printf("read_and_avg_slices \r\n");
-        //printf("DAC_fifo[%d] - %d\n", wptr, DAC_fifo[wptr]); //print slice data
-        wptr = (wptr+1); //increment to the next DAC_fifo position
-        //slices ++;
+        //printf("DAC_fifo[%d] - %d\n", slicesRead, DAC_fifo[slicesRead]); //print slice data
+        //printf("%d\n", DAC_fifo[slicesRead]); //print slice data
+        slicesRead = (slicesRead+1); //increment to the next DAC_fifo position
+        //printf("slicesRead6 = %d\n", slicesRead);
         if (num_slices == slice_num) //if all slices are read for this file, turn off read_slices flag 
         {
           read_slices = 0;
@@ -247,7 +243,7 @@ int main()
           slice_num++; //increment to the next slice
         }
       }
-    } while (wptr != 255 && file_end == 0); //256 slices read, time for DMA
+    } while (slicesRead < BUFFER_SIZE && file_end == 0); //256 slices read, time for DMA
     if (slice_num == 0)
     {
         // nothing to send
@@ -255,22 +251,22 @@ int main()
     } else 
     {
       //printf("2 - chunk type 0x%x, size %d\n",chunk_id,chunk_size);        
-      //printf("slice_num = %d\r\n", slice_num); //this and wptr should match at the end, wptr is 1 extra?    
-      //printf("wptr - %d\n", wptr);
+      //printf("slice_num = %d\r\n", slice_num); //this and slicesRead should match at the end 
+      //printf("slicesRead - %d\n", slicesRead);
       buf_sel = (buf_sel+1) & 1;
-      startDMA(wptr +1); //255 + 1 = 256, actual number of elements in the array.
-      wptr = 0;
-      /*
-      while (!DMA_complete) //wait for the DMA completion flag to set
-      {
+      startDMA(slicesRead);
+      slicesRead = 0;
+      //printf("slicesRead = %d\n", slicesRead);
+      
+      //while (!DMA_complete) //wait for the DMA completion flag to set
+      //{
+        //slicesRead = 0;
         //printf("DMA in progress - DMA_complete = %d\n", DMA_complete);
         //this doesnt work unless there is some command in here, need to research busy wait..
-        ;
-      }
-      printf("DMA_Complete - %d\n", DMA_complete);
-      DMA_complete = 0; //reset DMA flag
-      */
-    
+        //;
+      //}
+      //printf("DMA_Complete - %d\n", DMA_complete);
+      //DMA_complete = 0; //reset DMA flag
     }
   }
 }
@@ -279,6 +275,7 @@ int main()
 void TC0_callback(void) {
     // Just show sending complete.
     led3 = !led3;
+    
     // Get configuration pointer.
     MODDMA_Config *config = dma.getConfig();
     
@@ -290,7 +287,6 @@ void TC0_callback(void) {
 
     // Clear DMA IRQ flags.
     if (dma.irqType() == MODDMA::TcIrq) dma.clearTcIrq();
-
     //DMA_complete = 1;
 }
 
@@ -302,6 +298,7 @@ void ERR0_callback(void) {
 // Configuration callback on TC
 void TC1_callback(void) {
     // Just show sending complete.
+
     led4 = !led4;
     // Get configuration pointer.
     MODDMA_Config *config = dma.getConfig();
@@ -314,8 +311,7 @@ void TC1_callback(void) {
 
     // Clear DMA IRQ flags.
     if (dma.irqType() == MODDMA::TcIrq) dma.clearTcIrq();
-
-    //DMA_complete = 1;
+    //DMA_complete = 1;    
 }
 
 // Configuration callback on Error
