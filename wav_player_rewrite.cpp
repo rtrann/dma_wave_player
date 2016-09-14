@@ -4,6 +4,8 @@
 #include "MODDMA.h"
 #include "SDFileSystem.h"
 
+#define BUFFER_SIZE 2879
+
 DigitalOut led1(LED1);
 DigitalOut led3(LED3);
 DigitalOut led4(LED4);
@@ -32,7 +34,7 @@ unsigned char *data_bptr;
 int *data_wptr;
 FMT_STRUCT wav_format;
 long slice,num_slices;
-unsigned short DAC_fifo[256];
+unsigned short DAC_fifo[BUFFER_SIZE];
 short DAC_wptr;
 int read_slices = 0;
 int DMA_complete = 0;
@@ -125,7 +127,9 @@ void read_and_avg_slices(FILE *& wavefile, short DAC_wptr)
     }
   
     dac_data=(short unsigned)slice_value;//16 bit
-    DAC_fifo[DAC_wptr]=dac_data; //put slice value into dac fifo        
+    //printf("%d\n", dac_data);
+    //DAC_fifo[DAC_wptr]=dac_data; //put slice value into dac fifo        
+    DAC_fifo[DAC_wptr]=(dac_data & 0xFFC0) | (1<<16);
     free(slice_buf);
   } else if (feof(wavefile))
   {
@@ -154,7 +158,7 @@ void startDMA(int numOfSlices)
   ; // config end
   
   //DAC frequency
-  LPC_DAC->DACCNTVAL = 5; // 24 MHz / 2 bytes for 1 hz... /  =  
+  LPC_DAC->DACCNTVAL = 4; // 24 MHz / 2 bytes for 1 hz... /  =  
                                        // 24 MHz / 2 / 44.1 KHz = 272.1
                                        // 24 MHz / 2 / 22.1 KHz = 542.98 
                                        // 24 MHZ / 256/ 22.1 Khz = 4.24
@@ -173,7 +177,7 @@ int main()
   int slicesRead = 0;
   int slice_num = 0;
   file_end = 0;
-  for (i=0;i<256;i+=2) {
+  for (i=0;i<BUFFER_SIZE;i+=2) {
     DAC_fifo[i]=0;
     DAC_fifo[i+1]=3000;
   }
@@ -197,25 +201,25 @@ int main()
           slice_num++; //increment to the next slice
         }
       }
-    } while (slicesRead != 256 && file_end == 0); //256 slices read, time for DMA
+    } while (slicesRead != BUFFER_SIZE && file_end == 0); //256 slices read, time for DMA
     if (slice_num == 0)
     {
         // nothing to send
         break; 
     } else 
-    {      
+    {
+      //printf("Slice Number %d\n", slice_num);
       startDMA(slicesRead);
       slicesRead = 0;
-      /*
-      while (!DMA_complete) //wait for the DMA completion flag to set
+      //while (!(LPC_GPDMA->DMACIntTCClear & (1UL << 0))) //wait for the DMA completion flag to set
+      //{
+      //  ;
+      //}
+      while(1)
       {
-        //printf("DMA in progress - DMA_complete = %d\n", DMA_complete);
-        ;
+        //printf("Slice Number %d\n", slice_num);
+      ;
       }
-      printf("DMA_Complete - %d\n", DMA_complete);
-      DMA_complete = 0; //reset DMA flag
-      */
-    
     }
   }
 }
@@ -236,7 +240,7 @@ void TC0_callback(void) {
     // Clear DMA IRQ flags.
     if (dma.irqType() == MODDMA::TcIrq) dma.clearTcIrq();
 
-    DMA_complete = 1;
+    //DMA_complete = 1;
 }
 
 // Configuration callback on Error
