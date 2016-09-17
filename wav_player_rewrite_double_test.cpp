@@ -24,7 +24,7 @@ void ERR1_callback(void);
 
 int slicesRead = 0;
 
-#define BUFFER_SIZE 4000
+#define BUFFER_SIZE 256
 
 unsigned chunk_id,chunk_size,channel;
 unsigned data,samp_int,i;
